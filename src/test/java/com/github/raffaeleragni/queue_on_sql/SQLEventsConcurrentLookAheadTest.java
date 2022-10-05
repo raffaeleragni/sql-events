@@ -17,15 +17,17 @@ class SQLEventsConcurrentLookAheadTest {
   SQLEvents queue;
   ExecutorService executor;
 
-  private static Set<String> INPUTS = IntStream.range(1, 10_001)
+  private static int THREADS = 10;
+  private static int LOOK_AHEAD = THREADS + 5;
+  private static Set<String> INPUTS = IntStream.range(0, THREADS * LOOK_AHEAD * 10)
       .boxed()
       .map(String::valueOf)
       .collect(toSet());
 
   @BeforeEach
   void setup()  {
-    executor = Executors.newFixedThreadPool(100);
-    var config = new SQLEvents.Config("queue", 10);
+    executor = Executors.newFixedThreadPool(THREADS);
+    var config = new SQLEvents.Config("queue", 1, 10, LOOK_AHEAD);
     queue = new SQLEvents(config, () -> DatabaseProvider.connection(this.getClass().getName()));
   }
 
@@ -48,7 +50,7 @@ class SQLEventsConcurrentLookAheadTest {
 
     var tasks = new LinkedList<Future<?>>();
 
-    for (var i = 0; i < 100; i++)
+    for (var i = 0; i < THREADS; i++)
       tasks.add(executor.submit(consumerTask));
 
     for (var task: tasks)

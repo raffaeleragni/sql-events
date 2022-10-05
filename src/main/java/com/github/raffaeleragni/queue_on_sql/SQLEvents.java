@@ -11,7 +11,7 @@ import java.util.function.Supplier;
  * Events/Queue for competing consumers based on SQL.
  * The queue is not meant to store actual messages or objects. The items of the queue are intended to be small strings (varchar(50)) to use as references. UUIDs are possible within 50 chars.
  *
- * Currently supports look ahead count for collision mitigation, but not retry logic.
+ * Currently supports look ahead count for collision mitigation and retry with timeouts.
  * Usage:
  * <code><pre>
  *  var config = new SQLEvents.Config("my_queue_table", 10);
@@ -24,21 +24,14 @@ import java.util.function.Supplier;
  */
 public class SQLEvents {
 
-  private final Supplier<Connection> conSupplier;
-
-  private final String createQueue;
-  private final String selectAvailable;
-  private final String insertIntoQueue;
-  private final String selectNext;
-  private final String updateOptimisticLock;
-  private final String deleteItem;
-
   /**
    * Configuration:
    * - tableName: name for the SQL table to store the queue internals
+   * - retries: how many retries to do if exception occurs
+   * - timeout: if a message is stuck, it will be reprocessed within this timeout
    * - lookAhead: how many items to look ahead for collision mitigation, suggested value is N+small% where N is number of consumers
    */
-  public record Config(String tableName, int lookAhead) {}
+  public record Config(String tableName, int retries, long timeout, int lookAhead) {}
 
   public static class NullInput extends RuntimeException {}
   public static class SQLError extends RuntimeException {
@@ -46,6 +39,17 @@ public class SQLEvents {
       super(cause);
     }
   }
+
+  private final Supplier<Connection> conSupplier;
+
+  private final String createQueue;
+  private final String selectAvailable;
+  private final String insertIntoQueue;
+  private final String selectNext;
+  private final String takeItem;
+  private final String releaseItem;
+  private final String deleteItem;
+  private final String cleanTimeout;
 
   public SQLEvents(Config properties, Supplier<Connection> conSupplier) {
     this.conSupplier = conSupplier;
@@ -56,7 +60,8 @@ public class SQLEvents {
         ref_id varchar(50),
         version bigint,
         last_grabbed_at timestamp,
-        processed int default 0,
+        grabbed int default 0,
+        retried int default 0,
         primary key (id)
       )
       """.formatted(properties.tableName());
@@ -73,16 +78,24 @@ public class SQLEvents {
       """.formatted(properties.tableName());
     this.selectNext =
       """
-        select id, ref_id, version from %s limit %d
+        select id, ref_id, version from %s where grabbed = 0 limit %d
       """.formatted(properties.tableName(), properties.lookAhead());
-    this.updateOptimisticLock =
+    this.takeItem =
       """
-        update %s set version = ?, processed = 1, last_grabbed_at = current_timestamp where version = ? and id = ? and processed = 0
+        update %s set version = version+1, grabbed = 1, retried = retried+1, last_grabbed_at = current_timestamp where version = ? and id = ? and grabbed = 0
+      """.formatted(properties.tableName());
+    this.releaseItem =
+      """
+        update %s set grabbed = 0 where id = ?
       """.formatted(properties.tableName());
     this.deleteItem =
       """
         delete from %s where id = ?
       """.formatted(properties.tableName());
+    this.cleanTimeout =
+      """
+        update %s set grabbed = 0 where grabbed = 1 and current_timestamp > last_grabbed_at + %d
+      """.formatted(properties.tableName(), properties.timeout());
 
     statement(createQueue, PreparedStatement::execute);
   }
@@ -111,9 +124,10 @@ public class SQLEvents {
   }
 
   private Optional<String> ensureUniquePop() {
-    return connection(con ->
-      statement(con, selectNext, st -> lookAheadForItems(st, con))
-    );
+    return connection(con -> {
+      statement(con, cleanTimeout, PreparedStatement::execute);
+      return statement(con, selectNext, st -> lookAheadForItems(st, con));
+    });
   }
 
   private Optional<String> lookAheadForItems(PreparedStatement stGet, Connection con) throws SQLException {
@@ -122,7 +136,7 @@ public class SQLEvents {
         var id = rs.getString(1);
         var value = rs.getString(2);
         var version = rs.getLong(3);
-        var result = optimisticTakeItem(con, version, id, value);
+        var result = take(con, version, id, value);
         if (result.isPresent())
           return result;
       }
@@ -130,20 +144,26 @@ public class SQLEvents {
     }
   }
 
-  private Optional<String> optimisticTakeItem(Connection con, long version, String id, String value) {
-    return statement(con, updateOptimisticLock, st -> {
-      st.setLong(1, version+1);
-      st.setLong(2, version);
-      st.setString(3, id);
+  private Optional<String> take(Connection con, long version, String id, String value) {
+    return statement(con, takeItem, st -> {
+      st.setLong(1, version);
+      st.setString(2, id);
       if (st.executeUpdate() == 0)
         return Optional.empty();
 
-      deleteItem(con, id);
+      remove(con, id);
       return Optional.of(value);
     });
   }
 
-  private void deleteItem(Connection con, String id) {
+  private void release(String id) {
+    statement(releaseItem, st -> {
+      st.setString(1, id);
+      return st.executeUpdate();
+    });
+  }
+
+  private void remove(Connection con, String id) {
     statement(con, deleteItem, st -> {
       st.setString(1, id);
       return st.execute();
