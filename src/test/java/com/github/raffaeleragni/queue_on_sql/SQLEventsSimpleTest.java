@@ -14,7 +14,7 @@ class SQLEventsSimpleTest {
 
   @BeforeEach
   void setup()  {
-    var config = new SQLEvents.Config("queue", 1, 10, 1);
+    var config = new SQLEvents.Config("queue", 0, 10, 1);
     queue = new SQLEvents(config, () -> DatabaseProvider.connection(this.getClass().getName()));
   }
 

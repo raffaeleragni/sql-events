@@ -5,6 +5,8 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
@@ -50,6 +52,7 @@ public class SQLEvents {
   private final String releaseItem;
   private final String deleteItem;
   private final String cleanTimeout;
+  private final String deleteRetried;
 
   public SQLEvents(Config properties, Supplier<Connection> conSupplier) {
     this.conSupplier = conSupplier;
@@ -96,6 +99,10 @@ public class SQLEvents {
       """
         update %s set grabbed = 0 where grabbed = 1 and current_timestamp > last_grabbed_at + %d
       """.formatted(properties.tableName(), properties.timeout());
+    this.deleteRetried =
+      """
+        delete from %s where retried > %d
+      """.formatted(properties.tableName(), properties.retries());
 
     statement(createQueue, PreparedStatement::execute);
   }
@@ -120,23 +127,45 @@ public class SQLEvents {
   }
 
   public Optional<String> pop() {
-    return ensureUniquePop();
+    return returnUnique();
   }
 
-  private Optional<String> ensureUniquePop() {
+  public void consumeOne(Consumer<String> consumer) {
+    consumeUnique(consumer);
+  }
+
+  private Optional<String> consumeUnique(Consumer<String> consumer) {
     return connection(con -> {
-      statement(con, cleanTimeout, PreparedStatement::execute);
-      return statement(con, selectNext, st -> lookAheadForItems(st, con));
+      try {
+        statement(con, cleanTimeout, PreparedStatement::execute);
+        return statement(con, selectNext, st -> lookAheadForItems(st, con, (id, value) -> {
+          try {
+            consumer.accept(value);
+            remove(con, id);
+          } catch (RuntimeException ex) {
+            release(id);
+          }
+        }));
+      } finally {
+        statement(con, deleteRetried, PreparedStatement::execute);
+      }
     });
   }
 
-  private Optional<String> lookAheadForItems(PreparedStatement stGet, Connection con) throws SQLException {
+  private Optional<String> returnUnique() {
+    return connection(con -> {
+      statement(con, cleanTimeout, PreparedStatement::execute);
+      return statement(con, selectNext, st -> lookAheadForItems(st, con, (id, value) -> remove(con, id)));
+    });
+  }
+
+  private Optional<String> lookAheadForItems(PreparedStatement stGet, Connection con, BiConsumer<String, String> consumer) throws SQLException {
     try (var rs = stGet.executeQuery()) {
       while (rs.next()) {
         var id = rs.getString(1);
         var value = rs.getString(2);
         var version = rs.getLong(3);
-        var result = take(con, version, id, value);
+        var result = take(con, version, id, value, consumer);
         if (result.isPresent())
           return result;
       }
@@ -144,14 +173,14 @@ public class SQLEvents {
     }
   }
 
-  private Optional<String> take(Connection con, long version, String id, String value) {
+  private Optional<String> take(Connection con, long version, String id, String value, BiConsumer<String, String> consumer) {
     return statement(con, takeItem, st -> {
       st.setLong(1, version);
       st.setString(2, id);
       if (st.executeUpdate() == 0)
         return Optional.empty();
 
-      remove(con, id);
+      consumer.accept(id, value);
       return Optional.of(value);
     });
   }

@@ -15,7 +15,7 @@ class SQLEventsLookAheadTest {
 
   @BeforeEach
   void setup()  {
-    var config = new SQLEvents.Config("queue", 1, 10, 10);
+    var config = new SQLEvents.Config("queue", 0, 10, 10);
     queue = new SQLEvents(config, () -> DatabaseProvider.connection(this.getClass().getName()));
   }
 
