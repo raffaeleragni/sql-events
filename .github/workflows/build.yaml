@@ -56,5 +56,4 @@ jobs:
           SONATYPE_GPG_PASSPHRASE: ${{ secrets.SONATYPE_GPG_PASSPHRASE }}
         run: |
           export MAVEN_OPTS=-Dmaven.artifact.threads=100
-          # mvn -s .mvn/settings.xml -Prelease deploy org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${SONAR_PROJECT_KEY} -Dsonar.organization=raffaeleragni -Dsonar.host.url=https://sonarcloud.io
-          mvn package
+          mvn -s .mvn/settings.xml -Prelease deploy org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${SONAR_PROJECT_KEY} -Dsonar.organization=raffaeleragni -Dsonar.host.url=https://sonarcloud.io
