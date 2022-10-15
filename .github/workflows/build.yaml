@@ -34,13 +34,15 @@ jobs:
       - name: Configure GPG Key
         env:
           GPG_SECRET_KEY: ${{ secrets.SONATYPE_GPG_SECRET_KEY }}
-          PASSPHRASE: ${{ secrets.SONATYPE_GPG_PASSPHRASE }}
         run: |
           mkdir -p ~/.gnupg/
+          chmod 700 ~/.gnupg/
           echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
           gpg-connect-agent reloadagent /bye
-          printf "$GPG_SECRET_KEY" | base64 --decode > ~/.gnupg/private.key
-          echo $PASSPHRASE | gpg --batch --yes --passphrase-fd 0 --import ~/.gnupg/private.key
+          echo "$GPG_SECRET_KEY" > ~/.gnupg/private.key
+          echo ${{ secrets.SONATYPE_GPG_PASSPHRASE }} | gpg --batch --yes --passphrase-fd 0 --import ~/.gnupg/private.key
+          gpg --list-keys
+          gpg --list-secret-keys
       - name: Setup TAG
         if: startsWith(github.ref, 'refs/tags/')
         env:
