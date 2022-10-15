@@ -18,7 +18,7 @@ class SQLEventsConcurrentLookAheadTest {
   SQLEvents queue;
   ExecutorService executor;
 
-  private static int THREADS = 30;
+  private static int THREADS = 10;
   private static int LOOK_AHEAD = THREADS + 5;
   private static Set<String> INPUTS = IntStream.range(0, THREADS * LOOK_AHEAD * 10)
       .boxed()
