@@ -5,7 +5,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.github.raffaeleragni</groupId>
   <artifactId>db-events</artifactId>
-  <version>1.0-SNAPSHOT</version>
+  <version>1.0</version>
   <packaging>jar</packaging>
   <name>DB events</name>
   <description>Producer/Consumer in DB/SQL</description>
